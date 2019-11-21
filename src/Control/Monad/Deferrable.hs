@@ -1,10 +1,16 @@
-{-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE RankNTypes, LambdaCase, ScopedTypeVariables #-}
 module Control.Monad.Deferrable (
   DeferrableT,
   Deferrable,
   defer,
   fromFoldable,
-  omega
+  omega,
+  toMaybe,
+  runDeferrable,
+  foldrS,
+  foldrT,
+  toListOfN,
+  toListWhile
  ) where
 
 import Control.Applicative
@@ -49,7 +55,7 @@ instance MonadTrans DeferrableT where
 defer :: DeferrableT m ()
 defer = D (\c -> QS (\q -> case Sq.viewl q of
   Sq.EmptyL -> uQS (c ()) q
-  a Sq.:< r -> uQS a (q Sq.|> c ())
+  a Sq.:< r -> uQS a (r Sq.|> c ())
  ))
 
 fromFoldable :: (Foldable t, Applicative m) => t a -> DeferrableT m a
@@ -61,3 +67,40 @@ fromFoldable l = D (\c -> QS (\q ->
 
 omega :: (Foldable t, Applicative m) => t a -> DeferrableT m a
 omega = foldr ((. (defer *>)) . (<|>) . pure) empty
+
+term :: Applicative m => a -> QS m a
+term a = QS (\q -> pure (Just (a,q)))
+
+toMaybe :: Applicative m => DeferrableT m a -> m (Maybe a)
+toMaybe (D p) = fmap fst <$> uQS (p term) Sq.empty
+
+foldrS :: Monad m => (a -> (s -> m r) -> s -> m r) -> (s -> m r) ->
+  DeferrableT m a -> s -> m r
+foldrS c z (D p) s0 = go (p term) Sq.empty s0 where
+  go (QS x) q s = x q >>= \case
+    Nothing -> z s
+    Just (a,r) -> c a (case Sq.viewl r of
+      Sq.EmptyL -> z
+      y Sq.:< t -> go y t
+     ) s
+
+foldrT :: Monad m => (a -> m r -> m r) -> m r -> DeferrableT m a -> m r
+foldrT c z = flip (foldrS ((.) . c) (const z)) ()
+
+toList :: Monad m => DeferrableT m a -> m [a]
+toList = foldrT (fmap . (:)) (return [])
+
+runDeferrable :: Deferrable a -> [a]
+runDeferrable = runIdentity . toList
+
+toListOfN :: Monad m => Int -> DeferrableT m a -> m [a]
+toListOfN n0 p = foldrS (\a r -> \case
+  0 -> return []
+  n -> (a:) <$> r (n - 1)
+ ) (const $ return []) p n0
+
+toListWhile :: Monad m => (a -> m Bool) -> DeferrableT m a -> m [a]
+toListWhile p = foldrT (\a r -> p a >>= \case
+  True -> (a:) <$> r
+  False -> return []
+ ) (return [])
