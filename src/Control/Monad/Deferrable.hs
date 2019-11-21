@@ -1,6 +1,10 @@
 {-# LANGUAGE RankNTypes #-}
 module Control.Monad.Deferrable (
-  DeferrableT
+  DeferrableT,
+  Deferrable,
+  defer,
+  fromFoldable,
+  omega
  ) where
 
 import Control.Applicative
@@ -41,3 +45,19 @@ instance Applicative m => MonadPlus (DeferrableT m) where
 
 instance MonadTrans DeferrableT where
   lift a = D (\c -> QS (\q -> a >>= flip uQS q . c))
+
+defer :: DeferrableT m ()
+defer = D (\c -> QS (\q -> case Sq.viewl q of
+  Sq.EmptyL -> uQS (c ()) q
+  a Sq.:< r -> uQS a (q Sq.|> c ())
+ ))
+
+fromFoldable :: (Foldable t, Applicative m) => t a -> DeferrableT m a
+fromFoldable l = D (\c -> QS (\q ->
+  case Sq.viewl $ foldMap (Sq.singleton . c) l <> q of
+    Sq.EmptyL -> pure Nothing
+    a Sq.:< r -> uQS a r
+ ))
+
+omega :: (Foldable t, Applicative m) => t a -> DeferrableT m a
+omega = foldr ((. (defer *>)) . (<|>) . pure) empty
