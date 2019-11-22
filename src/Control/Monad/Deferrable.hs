@@ -9,6 +9,7 @@ module Control.Monad.Deferrable (
   runDeferrable,
   foldrS,
   foldrT,
+  toList,
   toListOfN,
   toListWhile
  ) where
@@ -20,6 +21,12 @@ import Data.Functor.Identity
 import qualified Data.Sequence as Sq
 
 newtype QS m a = QS { uQS :: Sq.Seq (QS m a) -> m (Maybe (a, Sq.Seq (QS m a))) }
+
+-- | A monad transformer which adds nondeterminism and some control over the
+-- order in which alternatives are evaluated. During evaluation a dequeue is
+-- maintained. The 'Alternative' and 'MonadPlus' instances both operate on the
+-- front of the dequeue. The 'defer' action operates on the back of the dequeue;
+-- and the 'omega' function uses both ends of the dequeue.
 newtype DeferrableT m a = D {
   unD :: forall r . (a -> QS m r) -> QS m r
  }
@@ -52,6 +59,7 @@ instance Applicative m => MonadPlus (DeferrableT m) where
 instance MonadTrans DeferrableT where
   lift a = D (\c -> QS (\q -> a >>= flip uQS q . c))
 
+-- | Put the current line of evaluation at the back of the dequeue.
 defer :: DeferrableT m ()
 defer = D (\c -> QS (\q -> case Sq.viewl q of
   Sq.EmptyL -> uQS (c ()) q
@@ -65,12 +73,28 @@ fromFoldable l = D (\c -> QS (\q ->
     a Sq.:< r -> uQS a r
  ))
 
+-- | Produces similar behaviour to the \'control-monad-omega\' package.
+--
+-- @
+--   (,) \<$\> omega a \<*\> omega b
+-- @
+--
+-- will produce results in the same order as
+--
+-- @
+--   (,) \<$\> each a \<*\> each b
+-- @
+--
+-- However; chains with more invocations of 'omega' the order of results may be
+-- different. This function can produce results in some scenarios where a direct
+-- transliteration to the omega library will enter an infinite loop.
 omega :: (Foldable t, Applicative m) => t a -> DeferrableT m a
 omega = foldr ((. (defer *>)) . (<|>) . pure) empty
 
 term :: Applicative m => a -> QS m a
 term a = QS (\q -> pure (Just (a,q)))
 
+-- | Extract the first value, if it exists.
 toMaybe :: Applicative m => DeferrableT m a -> m (Maybe a)
 toMaybe (D p) = fmap fst <$> uQS (p term) Sq.empty
 
