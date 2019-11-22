@@ -23,11 +23,11 @@ import qualified Data.Sequence as Sq
 
 newtype QS m a = QS { uQS :: Sq.Seq (QS m a) -> m (Maybe (a, Sq.Seq (QS m a))) }
 
--- | A monad transformer which adds nondeterminism and some control over the
--- order in which alternatives are evaluated. During evaluation a dequeue is
--- maintained. The 'Alternative' and 'MonadPlus' instances both operate on the
--- front of the dequeue. The 'defer' action operates on the back of the dequeue;
--- and the 'omega' function uses both ends of the dequeue.
+-- | A monad transformer which adds nondeterminism with a
+-- depth-first/breadth-first hybrid search strategy. Searching within each layer
+-- is done depth-first; boundaries between layers are inserted with the 'defer'
+-- action; and execution of each layer does not begin until the layer before it
+-- is finished.
 newtype DeferrableT m a = D {
   unD :: forall r . (a -> QS m r) -> QS m r
  }
@@ -60,7 +60,7 @@ instance Applicative m => MonadPlus (DeferrableT m) where
 instance MonadTrans DeferrableT where
   lift a = D (\c -> QS (\q -> a >>= flip uQS q . c))
 
--- | Put the current line of evaluation at the back of the dequeue.
+-- | Create a level boundary.
 defer :: DeferrableT m ()
 defer = D (\c -> QS (\q -> case Sq.viewl q of
   Sq.EmptyL -> uQS (c ()) q
@@ -70,21 +70,8 @@ defer = D (\c -> QS (\q -> case Sq.viewl q of
 fromFoldable :: (Foldable t, Applicative m) => t a -> DeferrableT m a
 fromFoldable = foldr ((<|>) . pure) empty
 
--- | Produces similar behaviour to the \'control-monad-omega\' package.
---
--- @
---   (,) \<$\> omega a \<*\> omega b
--- @
---
--- will produce results in the same order as
---
--- @
---   (,) \<$\> each a \<*\> each b
--- @
---
--- However; chains with more invocations of 'omega' the order of results may be
--- different. This function can produce results in some scenarios where a direct
--- transliteration to the omega library will enter an infinite loop.
+-- | Returns the first element of the argument in the current layer; then each
+-- subsequent element in a later layer.
 omega :: (Foldable t, Applicative m) => t a -> DeferrableT m a
 omega = foldr ((. (defer *>)) . (<|>) . pure) empty
 
