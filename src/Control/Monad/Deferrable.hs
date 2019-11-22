@@ -1,10 +1,11 @@
-{-# LANGUAGE RankNTypes, LambdaCase, ScopedTypeVariables #-}
+{-# LANGUAGE RankNTypes, LambdaCase #-}
 module Control.Monad.Deferrable (
   DeferrableT,
   Deferrable,
   defer,
   fromFoldable,
   omega,
+  bfs,
   toMaybe,
   runDeferrable,
   foldrS,
@@ -67,11 +68,7 @@ defer = D (\c -> QS (\q -> case Sq.viewl q of
  ))
 
 fromFoldable :: (Foldable t, Applicative m) => t a -> DeferrableT m a
-fromFoldable l = D (\c -> QS (\q ->
-  case Sq.viewl $ foldMap (Sq.singleton . c) l <> q of
-    Sq.EmptyL -> pure Nothing
-    a Sq.:< r -> uQS a r
- ))
+fromFoldable = foldr ((<|>) . pure) empty
 
 -- | Produces similar behaviour to the \'control-monad-omega\' package.
 --
@@ -90,6 +87,12 @@ fromFoldable l = D (\c -> QS (\q ->
 -- transliteration to the omega library will enter an infinite loop.
 omega :: (Foldable t, Applicative m) => t a -> DeferrableT m a
 omega = foldr ((. (defer *>)) . (<|>) . pure) empty
+
+bfs :: Monad m => (a -> m (Either [a] b)) -> a -> DeferrableT m b
+bfs branch = go where
+  go a = lift (branch a) >>= \case
+    Left b -> defer >> fromFoldable b >>= go
+    Right b -> return b
 
 term :: Applicative m => a -> QS m a
 term a = QS (\q -> pure (Just (a,q)))
